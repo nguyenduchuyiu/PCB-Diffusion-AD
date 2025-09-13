@@ -1,4 +1,4 @@
-diffad/
+.venv/
 __pycache__/
 *.pyc
 *.pyo
@@ -11,4 +11,5 @@ __pycache__/
 *.pyzwzw
 
 datasets/
+*.pt
 

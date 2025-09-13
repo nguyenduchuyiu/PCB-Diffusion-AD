@@ -17,7 +17,8 @@ texture_list = ['carpet', 'zipper', 'leather', 'tile', 'wood','grid',
 
 class RealIADTestDataset(Dataset):
     def __init__(self, data_path, classname, img_size):
-        self.root_dir = os.path.join(data_path, 'test')
+        # Fix the path construction to include RealIAD and classname
+        self.root_dir = os.path.join(data_path, 'RealIAD', classname, 'test')
         self.images = sorted(glob.glob(self.root_dir + "/*/*.jpg"))
         self.resize_shape = [img_size[0], img_size[1]]
 
@@ -56,7 +57,7 @@ class RealIADTestDataset(Dataset):
             image, mask = self.transform_image(img_path, mask_path)
             has_anomaly = np.array([1], dtype=np.float32)
 
-        sample = {'image': image, 'has_anomaly': has_anomaly, 'mask': mask, 'idx': idx}
+        sample = {'image': image, 'has_anomaly': has_anomaly, 'mask': mask, 'idx': idx, 'file_name': [img_path]}
         return sample
 
 class RealIADTrainDataset(Dataset):

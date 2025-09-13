@@ -121,8 +121,14 @@ def load_checkpoint(param, device,sub_class,checkpoint_type,args):
 
     ck_path = f'{args["output_path"]}/model/diff-params-ARGS={param}/{sub_class}/params-{checkpoint_type}.pt'
     print("checkpoint",ck_path)
-    loaded_model = torch.load(ck_path, map_location=device)
-          
+
+    from collections import defaultdict
+    try:
+        torch.serialization.add_safe_globals([defaultdict])
+    except Exception:
+        pass
+
+    loaded_model = torch.load(ck_path, map_location=device, weights_only=False)
     return loaded_model
 
 
@@ -378,63 +384,63 @@ def main():
     args = defaultdict_from_json(args)
     real_iad_classes = os.listdir(os.path.join(args["data_root_path"], args['data_name']))
     
-    current_classes=real_iad_classes
-    checkpoint_type='best'
+    current_classes = real_iad_classes
+    checkpoint_types = ['best', 'last']
 
     for sub_class in current_classes:
-        args, output = load_parameters(device,sub_class,checkpoint_type)
-        print(f"args{args['arg_num']}")
-        print("class",sub_class)
-        
-        in_channels = args["channels"]
-
-        unet_model = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
-                    "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"],
-                in_channels=in_channels
-                ).to(device)
-
-
-
-        seg_model=SegmentationSubNetwork(in_channels=6, out_channels=1).to(device)
-
-        # Load model states
-        unet_model.load_state_dict(output["unet_model_state_dict"])
-        unet_model.to(device)
-        
-        seg_model.load_state_dict(output["seg_model_state_dict"])
-        seg_model.to(device)
-        
-        # Enable multi-GPU for evaluation if available
-        if num_gpus > 1:
-            print(f"Wrapping models with DataParallel for {num_gpus} GPUs")
-            unet_model = torch.nn.DataParallel(unet_model)
-            seg_model = torch.nn.DataParallel(seg_model)
-        
-        unet_model.eval()
-        seg_model.eval()
-
-        print("EPOCH:",output['n_epoch'])
-
-        testing_dataset = RealIADTestDataset(
-            args["data_root_path"], sub_class, img_size=args["img_size"]
-        )
-        class_type=args['data_name']
-        
-                
-        data_len = len(testing_dataset) 
-        test_loader = DataLoader(testing_dataset, batch_size=1,shuffle=False, num_workers=4)
-
-        
-        # make arg specific directories
-        
-        for i in [f'{args["output_path"]}/metrics/ARGS={args["arg_num"]}/{sub_class}']:
+        for checkpoint_type in checkpoint_types:
             try:
-                os.makedirs(i)
-            except OSError:
-                pass
+                args, output = load_parameters(device, sub_class, checkpoint_type)
+            except FileNotFoundError:
+                print(f"Checkpoint {checkpoint_type} not found for class {sub_class}, skipping.")
+                continue
 
+            print(f"args{args['arg_num']}")
+            print("class", sub_class)
+            
+            in_channels = args["channels"]
 
-        testing(test_loader, args,unet_model,seg_model,data_len,sub_class,class_type,checkpoint_type,device)
+            unet_model = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
+                        "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"],
+                    in_channels=in_channels
+                    ).to(device)
+
+            seg_model = SegmentationSubNetwork(in_channels=6, out_channels=1).to(device)
+
+            # Load model states
+            unet_model.load_state_dict(output["unet_model_state_dict"])
+            unet_model.to(device)
+            
+            seg_model.load_state_dict(output["seg_model_state_dict"])
+            seg_model.to(device)
+            
+            # Enable multi-GPU for evaluation if available
+            if num_gpus > 1:
+                print(f"Wrapping models with DataParallel for {num_gpus} GPUs")
+                unet_model = torch.nn.DataParallel(unet_model)
+                seg_model = torch.nn.DataParallel(seg_model)
+            
+            unet_model.eval()
+            seg_model.eval()
+
+            print("EPOCH:", output['n_epoch'])
+
+            testing_dataset = RealIADTestDataset(
+                args["data_root_path"], sub_class, img_size=args["img_size"]
+            )
+            class_type = args['data_name']
+                    
+            data_len = len(testing_dataset) 
+            test_loader = DataLoader(testing_dataset, batch_size=1, shuffle=False, num_workers=4)
+
+            # make arg specific directories
+            for i in [f'{args["output_path"]}/metrics/ARGS={args["arg_num"]}/{sub_class}']:
+                try:
+                    os.makedirs(i)
+                except OSError:
+                    pass
+
+            testing(test_loader, args, unet_model, seg_model, data_len, sub_class, class_type, checkpoint_type, device)
 
 
 if __name__ == '__main__':
