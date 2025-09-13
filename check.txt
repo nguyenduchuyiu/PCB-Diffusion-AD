@@ -1,0 +1,1 @@
+find RealIAD-data -type d -exec sh -c 'printf "%s: " "$1"; find "$1" -maxdepth 1 -type f | wc -l' _ {} \;
