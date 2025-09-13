@@ -13,6 +13,7 @@ import torch.nn as nn
 from data.dataset_beta_thresh import RealIADTrainDataset, RealIADTestDataset
 from math import exp
 import torch.nn.functional as F
+from torch.cuda.amp import autocast, GradScaler
 from models.DDPM import GaussianDiffusionModel, get_beta_schedule
 from scipy.ndimage import gaussian_filter
 from skimage.measure import label, regionprops
@@ -83,7 +84,17 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     
     optimizer_seg = optim.Adam(seg_model.parameters(),lr=args['seg_lr'],weight_decay=args['weight_decay'])
     
+    # Initialize mixed precision scaler
+    use_mixed_precision = args.get('use_mixed_precision', True) and torch.cuda.is_available()
+    scaler = GradScaler() if use_mixed_precision else None
     
+    # Gradient accumulation settings
+    gradient_accumulation_steps = args.get('gradient_accumulation_steps', 1)
+    effective_batch_size = args['Batch_Size'] * gradient_accumulation_steps
+    
+    print(f"Mixed Precision (FP16): {'Enabled' if use_mixed_precision else 'Disabled'}")
+    print(f"Gradient Accumulation Steps: {gradient_accumulation_steps}")
+    print(f"Effective Batch Size: {effective_batch_size}")
 
     loss_focal = BinaryFocalLoss().to(device)
     loss_smL1= nn.SmoothL1Loss().to(device)
@@ -113,29 +124,57 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
         train_smL1_loss = 0.0
         train_noise_loss = 0.0
         tbar = tqdm(training_dataset_loader)
+        
+        # Initialize gradient accumulation
+        optimizer_ddpm.zero_grad()
+        optimizer_seg.zero_grad()
+        
         for i, sample in enumerate(tbar):
             
             aug_image=sample['augmented_image'].to(device)
             anomaly_mask = sample["anomaly_mask"].to(device)
             anomaly_label = sample["has_anomaly"].to(device).squeeze()
 
-            noise_loss, pred_x0,normal_t,x_normal_t,x_noiser_t = ddpm_sample.norm_guided_one_step_denoising(unet_model, aug_image, anomaly_label,args)
-            pred_mask = seg_model(torch.cat((aug_image, pred_x0), dim=1)) 
+            # Mixed precision forward pass
+            if use_mixed_precision:
+                with autocast():
+                    noise_loss, pred_x0,normal_t,x_normal_t,x_noiser_t = ddpm_sample.norm_guided_one_step_denoising(unet_model, aug_image, anomaly_label,args)
+                    pred_mask = seg_model(torch.cat((aug_image, pred_x0), dim=1)) 
 
-            #loss
-            focal_loss = loss_focal(pred_mask,anomaly_mask)
-            smL1_loss = loss_smL1(pred_mask, anomaly_mask)
-            loss = noise_loss + 5*focal_loss + smL1_loss
+                    #loss
+                    focal_loss = loss_focal(pred_mask,anomaly_mask)
+                    smL1_loss = loss_smL1(pred_mask, anomaly_mask)
+                    loss = (noise_loss + 5*focal_loss + smL1_loss) / gradient_accumulation_steps
+            else:
+                noise_loss, pred_x0,normal_t,x_normal_t,x_noiser_t = ddpm_sample.norm_guided_one_step_denoising(unet_model, aug_image, anomaly_label,args)
+                pred_mask = seg_model(torch.cat((aug_image, pred_x0), dim=1)) 
+
+                #loss
+                focal_loss = loss_focal(pred_mask,anomaly_mask)
+                smL1_loss = loss_smL1(pred_mask, anomaly_mask)
+                loss = (noise_loss + 5*focal_loss + smL1_loss) / gradient_accumulation_steps
             
-            optimizer_ddpm.zero_grad()
-            optimizer_seg.zero_grad()
-            loss.backward()
+            # Mixed precision backward pass
+            if use_mixed_precision:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
 
-            optimizer_ddpm.step()
-            optimizer_seg.step()
-            scheduler_seg.step()
+            # Gradient accumulation step
+            if (i + 1) % gradient_accumulation_steps == 0:
+                if use_mixed_precision:
+                    scaler.step(optimizer_ddpm)
+                    scaler.step(optimizer_seg)
+                    scaler.update()
+                else:
+                    optimizer_ddpm.step()
+                    optimizer_seg.step()
+                
+                scheduler_seg.step()
+                optimizer_ddpm.zero_grad()
+                optimizer_seg.zero_grad()
 
-            train_loss += loss.item()
+            train_loss += loss.item() * gradient_accumulation_steps  # Scale back for logging
             tbar.set_description('Epoch:%d, Train loss: %.3f' % (epoch, train_loss))
 
             train_smL1_loss += smL1_loss.item()
@@ -299,13 +338,25 @@ def main():
 
         data_len = len(testing_dataset)
         
-        # Adjust batch size for multi-GPU training
-        effective_batch_size = args['Batch_Size']
-        if num_gpus > 1:
-            effective_batch_size = args['Batch_Size'] * num_gpus
-            print(f"Adjusting batch size from {args['Batch_Size']} to {effective_batch_size} for {num_gpus} GPUs")
+        # Calculate effective batch size considering multi-GPU and gradient accumulation
+        base_batch_size = args['Batch_Size']
+        gradient_accumulation_steps = args.get('gradient_accumulation_steps', 1)
         
-        training_dataset_loader = DataLoader(training_dataset, batch_size=effective_batch_size,shuffle=True,num_workers=8,pin_memory=True,drop_last=True)
+        # For DataLoader, we use the base batch size
+        dataloader_batch_size = base_batch_size
+        if num_gpus > 1:
+            dataloader_batch_size = base_batch_size * num_gpus
+            
+        # Total effective batch size
+        total_effective_batch_size = dataloader_batch_size * gradient_accumulation_steps
+        
+        print(f"Batch size configuration:")
+        print(f"  - Base batch size: {base_batch_size}")
+        print(f"  - DataLoader batch size: {dataloader_batch_size} ({'Multi-GPU' if num_gpus > 1 else 'Single-GPU'})")
+        print(f"  - Gradient accumulation steps: {gradient_accumulation_steps}")
+        print(f"  - Total effective batch size: {total_effective_batch_size}")
+        
+        training_dataset_loader = DataLoader(training_dataset, batch_size=dataloader_batch_size,shuffle=True,num_workers=8,pin_memory=True,drop_last=True)
         test_loader = DataLoader(testing_dataset, batch_size=1,shuffle=False, num_workers=4)
 
         # make arg specific directories

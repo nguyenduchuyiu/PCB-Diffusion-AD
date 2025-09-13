@@ -26,6 +26,8 @@
   "condition_w":1,
   "eval_normal_t":200,
   "eval_noisier_t":400,
-  "output_path":"outputs"
+  "output_path":"outputs",
+  "gradient_accumulation_steps": 4,
+  "use_mixed_precision": true
 
 }

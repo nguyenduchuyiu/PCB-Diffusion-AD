@@ -11,7 +11,8 @@ import torch.nn as nn
 from models.Recon_subnetwork import UNetModel, update_ema_params
 from models.Seg_subnetwork import SegmentationSubNetwork
 import torch.nn as nn
-from data.dataset_beta_thresh import MVTecTrainDataset,MVTecTestDataset,VisATrainDataset,VisATestDataset,DAGMTrainDataset,DAGMTestDataset,MPDDTestDataset,MPDDTrainDataset
+from torch.cuda.amp import autocast
+from data.dataset_beta_thresh import RealIADTestDataset
 from models.DDPM import GaussianDiffusionModel, get_beta_schedule
 from math import exp
 import torch.nn.functional as F
@@ -225,9 +226,16 @@ def testing(testing_dataset_loader, args,unet_model,seg_model,data_len,sub_class
         
         normal_t_tensor = torch.tensor([normal_t], device=image.device).repeat(image.shape[0])
         noiser_t_tensor = torch.tensor([noiser_t], device=image.device).repeat(image.shape[0])
-        loss,pred_x_0_condition,pred_x_0_normal,pred_x_0_noisier,x_normal_t,x_noiser_t,pred_x_t_noisier = ddpm_sample.norm_guided_one_step_denoising_eval(unet_model, image, normal_t_tensor,noiser_t_tensor,args)
         
-        pred_mask = seg_model(torch.cat((image, pred_x_0_condition), dim=1)) 
+        # Use mixed precision for evaluation if available
+        use_mixed_precision = torch.cuda.is_available()
+        if use_mixed_precision:
+            with autocast():
+                loss,pred_x_0_condition,pred_x_0_normal,pred_x_0_noisier,x_normal_t,x_noiser_t,pred_x_t_noisier = ddpm_sample.norm_guided_one_step_denoising_eval(unet_model, image, normal_t_tensor,noiser_t_tensor,args)
+                pred_mask = seg_model(torch.cat((image, pred_x_0_condition), dim=1))
+        else:
+            loss,pred_x_0_condition,pred_x_0_normal,pred_x_0_noisier,x_normal_t,x_noiser_t,pred_x_t_noisier = ddpm_sample.norm_guided_one_step_denoising_eval(unet_model, image, normal_t_tensor,noiser_t_tensor,args)
+            pred_mask = seg_model(torch.cat((image, pred_x_0_condition), dim=1)) 
 
 
         out_mask = pred_mask
@@ -360,16 +368,15 @@ def main():
         print("Using single GPU for evaluation")
     else:
         print("Using CPU for evaluation")
-    mvtec_classes = ['carpet', 'grid', 'leather', 'tile', 'wood', 'bottle', 'cable', 'capsule', 'hazelnut', 'metal_nut', 'pill', 'screw',
-     'toothbrush', 'transistor', 'zipper']
-    mpdd_classes = ['bracket_black', 'bracket_brown', 'bracket_white', 'connector', 'metal_plate', 'tubes'] 
-    visa_classes = ['candle', 'capsules', 'cashew', 'chewinggum', 'fryum', 'macaroni1', 'macaroni2', 'pcb1', 'pcb2',
-             'pcb3', 'pcb4', 'pipe_fryum']
-
-    dagm_class = ['Class1', 'Class2', 'Class3', 'Class4', 'Class5',
-                 'Class6', 'Class7', 'Class8', 'Class9', 'Class10']
+    file = "args1.json"
+    # load the json args
+    with open(f'./args/{file}', 'r') as f:
+        args = json.load(f)
+    args['arg_num'] = file[4:-5]
+    args = defaultdict_from_json(args)
+    real_iad_classes = os.listdir(os.path.join(args["data_root_path"], args['data_name']))
     
-    current_classes=mvtec_classes
+    current_classes=real_iad_classes
     checkpoint_type='best'
 
     for sub_class in current_classes:
@@ -406,33 +413,10 @@ def main():
 
         print("EPOCH:",output['n_epoch'])
 
-        if sub_class in visa_classes:
-            subclass_path = os.path.join(args['visa_root_path'],sub_class)
-            print("visa_eval_root_path",args["visa_root_path"])
-            print("subclass_path",subclass_path)
-            testing_dataset = VisATestDataset(
-                subclass_path,sub_class,img_size=args["img_size"],
-                )
-            class_type='VisA'
-        elif sub_class in mpdd_classes:
-            subclass_path = os.path.join(args["mpdd_root_path"],sub_class)
-            testing_dataset = MVTecTestDataset(
-                subclass_path,sub_class,img_size=args["img_size"],
-                )
-            class_type='MPDD'
-        elif sub_class in mvtec_classes:
-            subclass_path = os.path.join(args["mvtec_root_path"],sub_class)
-            testing_dataset = MVTecTestDataset(
-                subclass_path,sub_class,img_size=args["img_size"],
-                )
-            class_type='MVTec'
-
-        elif sub_class in dagm_class:
-            subclass_path = os.path.join(args["dagm_root_path"],sub_class)
-            testing_dataset =DAGMTestDataset(
-                subclass_path,sub_class,img_size=args["img_size"],
-                )
-            class_type='DAGM'
+        testing_dataset = RealIADTestDataset(
+            args["data_root_path"], sub_class, img_size=args["img_size"]
+        )
+        class_type=args['data_name']
         
                 
         data_len = len(testing_dataset) 
