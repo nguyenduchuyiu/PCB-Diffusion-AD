@@ -158,9 +158,8 @@ class DecoderSegmentation(nn.Module):
 
 
 
-        self.fin_out = nn.Sequential(nn.Conv2d(base_width, out_channels, kernel_size=3, padding=1)
-        ,nn.Sigmoid()
-        )
+        # Remove sigmoid for mixed precision compatibility with binary_cross_entropy_with_logits
+        self.fin_out = nn.Sequential(nn.Conv2d(base_width, out_channels, kernel_size=3, padding=1))
 
     def forward(self, b1,b2,b3,b4,b5,b6):
         up_b = self.up_b(b6)

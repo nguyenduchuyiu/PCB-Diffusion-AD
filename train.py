@@ -13,7 +13,8 @@ import torch.nn as nn
 from data.dataset_beta_thresh import RealIADTrainDataset, RealIADTestDataset
 from math import exp
 import torch.nn.functional as F
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast
+from torch.cuda.amp import GradScaler
 from models.DDPM import GaussianDiffusionModel, get_beta_schedule
 from scipy.ndimage import gaussian_filter
 from skimage.measure import label, regionprops
@@ -44,10 +45,8 @@ class BinaryFocalLoss(nn.Module):
         self.reduce = reduce
 
     def forward(self, inputs, targets):
-        if self.logits:
-            BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
-        else:
-            BCE_loss = F.binary_cross_entropy(inputs, targets, reduction='none')
+        # Always use binary_cross_entropy_with_logits for mixed precision compatibility
+        BCE_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction='none')
         pt = torch.exp(-BCE_loss)
         F_loss = self.alpha * (1-pt)**self.gamma * BCE_loss
 
@@ -137,7 +136,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
 
             # Mixed precision forward pass
             if use_mixed_precision:
-                with autocast():
+                with autocast('cuda'):
                     noise_loss, pred_x0,normal_t,x_normal_t,x_noiser_t = ddpm_sample.norm_guided_one_step_denoising(unet_model, aug_image, anomaly_label,args)
                     pred_mask = seg_model(torch.cat((aug_image, pred_x0), dim=1)) 
 

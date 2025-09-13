@@ -11,7 +11,7 @@ import torch.nn as nn
 from models.Recon_subnetwork import UNetModel, update_ema_params
 from models.Seg_subnetwork import SegmentationSubNetwork
 import torch.nn as nn
-from torch.cuda.amp import autocast
+from torch.amp import autocast
 from data.dataset_beta_thresh import RealIADTestDataset
 from models.DDPM import GaussianDiffusionModel, get_beta_schedule
 from math import exp
@@ -230,12 +230,14 @@ def testing(testing_dataset_loader, args,unet_model,seg_model,data_len,sub_class
         # Use mixed precision for evaluation if available
         use_mixed_precision = torch.cuda.is_available()
         if use_mixed_precision:
-            with autocast():
+            with autocast('cuda'):
                 loss,pred_x_0_condition,pred_x_0_normal,pred_x_0_noisier,x_normal_t,x_noiser_t,pred_x_t_noisier = ddpm_sample.norm_guided_one_step_denoising_eval(unet_model, image, normal_t_tensor,noiser_t_tensor,args)
-                pred_mask = seg_model(torch.cat((image, pred_x_0_condition), dim=1))
+                pred_mask_logits = seg_model(torch.cat((image, pred_x_0_condition), dim=1))
+                pred_mask = torch.sigmoid(pred_mask_logits)  # Apply sigmoid for evaluation
         else:
             loss,pred_x_0_condition,pred_x_0_normal,pred_x_0_noisier,x_normal_t,x_noiser_t,pred_x_t_noisier = ddpm_sample.norm_guided_one_step_denoising_eval(unet_model, image, normal_t_tensor,noiser_t_tensor,args)
-            pred_mask = seg_model(torch.cat((image, pred_x_0_condition), dim=1)) 
+            pred_mask_logits = seg_model(torch.cat((image, pred_x_0_condition), dim=1))
+            pred_mask = torch.sigmoid(pred_mask_logits)  # Apply sigmoid for evaluation 
 
 
         out_mask = pred_mask
