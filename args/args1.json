@@ -1,7 +1,7 @@
 {
   "img_size": [256,256],
-  "Batch_Size": 16,
-  "EPOCHS": 3000,
+  "Batch_Size": 4,
+  "EPOCHS": 1,
   "T": 1000,
   "base_channels": 128,
   "beta_schedule": "linear",
@@ -19,8 +19,8 @@
   "noise_fn":"gauss",
   "channels":3,
   "data_name":"RealIAD",
-  "data_root_path":"datasets",
-  "anomaly_source_path":"datasets/dtd",
+  "data_root_path":"/kaggle/input/pcb-dataset",
+  "anomaly_source_path":"/kaggle/input/pcb-dataset/dtd",
   "noisier_t_range":600,
   "less_t_range":300,
   "condition_w":1,
@@ -29,5 +29,4 @@
   "output_path":"outputs",
   "gradient_accumulation_steps": 4,
   "use_mixed_precision": true
-
 }

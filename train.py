@@ -343,8 +343,6 @@ def main():
         
         # For DataLoader, we use the base batch size
         dataloader_batch_size = base_batch_size
-        if num_gpus > 1:
-            dataloader_batch_size = base_batch_size * num_gpus
             
         # Total effective batch size
         total_effective_batch_size = dataloader_batch_size * gradient_accumulation_steps
