@@ -277,8 +277,9 @@ def testing(testing_dataset_loader, args,unet_model,seg_model,data_len,sub_class
        
         raw_image = image_transform(image.detach().cpu().numpy()[0])
 
-        ano_map = gaussian_filter(
-                out_mask[0, 0, :, :].detach().cpu().numpy(), sigma=4)
+        # Fix: Use OpenCV gaussian blur instead of scipy to avoid float16 issue  
+        mask_data = out_mask[0, 0, :, :].detach().cpu().numpy().astype(np.float32)
+        ano_map = cv2.GaussianBlur(mask_data, (15, 15), 4)  # Using OpenCV instead of scipy
         ano_map=min_max_norm(ano_map)
         ano_map=cvt2heatmap(ano_map*255.0)
 
