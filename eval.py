@@ -290,7 +290,9 @@ def testing(testing_dataset_loader, args,unet_model,seg_model,data_len,sub_class
         recon_normal_t = image_transform(pred_x_0_normal.detach().cpu().numpy()[0])
         recon_noisier_t = image_transform(pred_x_0_noisier.detach().cpu().numpy()[0])
 
-        savename = image_path[0].split("/")
+        # Fix: Handle image_path properly - extract string from list/tuple
+        img_path_str = image_path[0] if isinstance(image_path, (list, tuple)) else image_path
+        savename = img_path_str.split("/")
         savename = "_".join(savename[-4:])
         savename = os.path.join(f'{args["output_path"]}/metrics/ARGS={args["arg_num"]}/{sub_class}/visualization_{normal_t}_{noiser_t}_{args["condition_w"]}condition_{checkpoint_type}ck', savename)
 
