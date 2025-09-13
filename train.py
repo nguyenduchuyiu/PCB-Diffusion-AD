@@ -55,6 +55,22 @@ class BinaryFocalLoss(nn.Module):
         else:
             return F_loss
 
+def count_parameters(model):
+    """Count the number of trainable parameters in a model"""
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total_params
+
+def print_model_info(model, model_name):
+    """Print detailed information about model parameters"""
+    total_params = count_parameters(model)
+    print(f"{model_name}: {total_params:,} trainable parameters")
+    
+    # Memory estimation (FP32)
+    param_memory_mb = total_params * 4 / (1024 ** 2)
+    print(f"{model_name} Memory: ~{param_memory_mb:.1f} MB")
+    
+    return total_params
+
 def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_class,class_type,device, num_gpus=1):
    
     in_channels = args["channels"]
@@ -78,6 +94,17 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
         print(f"Wrapping models with DataParallel for {num_gpus} GPUs")
         unet_model = torch.nn.DataParallel(unet_model)
         seg_model = torch.nn.DataParallel(seg_model)
+
+    # Count trainable parameters
+    unet_params = count_parameters(unet_model)
+    seg_params = count_parameters(seg_model)
+    total_params = unet_params + seg_params
+    
+    print(f"Model Parameters:")
+    print(f"  - UNet Model: {unet_params:,} parameters")
+    print(f"  - Segmentation Model: {seg_params:,} parameters") 
+    print(f"  - Total Trainable Parameters: {total_params:,} parameters")
+    print(f"  - Memory (approx): {total_params * 4 / 1024**2:.1f} MB (FP32)")
 
     optimizer_ddpm = optim.Adam( unet_model.parameters(), lr=args['diffusion_lr'],weight_decay=args['weight_decay'])
     
@@ -316,7 +343,6 @@ def main():
     args['arg_num'] = file[4:-5]
     args = defaultdict_from_json(args)
 
-
     real_iad_classes = os.listdir(os.path.join(args["data_root_path"], args['data_name']))
 
     for sub_class in real_iad_classes:   
@@ -352,6 +378,7 @@ def main():
         print(f"  - DataLoader batch size: {dataloader_batch_size} ({'Multi-GPU' if num_gpus > 1 else 'Single-GPU'})")
         print(f"  - Gradient accumulation steps: {gradient_accumulation_steps}")
         print(f"  - Total effective batch size: {total_effective_batch_size}")
+
         
         training_dataset_loader = DataLoader(training_dataset, batch_size=dataloader_batch_size,shuffle=True,num_workers=8,pin_memory=True,drop_last=True)
         test_loader = DataLoader(testing_dataset, batch_size=1,shuffle=False, num_workers=4)
@@ -365,7 +392,6 @@ def main():
             except OSError:
                 pass
 
-    
         train(training_dataset_loader, test_loader, args, data_len,sub_class,class_type,device, num_gpus)
 
 if __name__ == '__main__':

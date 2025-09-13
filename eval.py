@@ -290,8 +290,19 @@ def testing(testing_dataset_loader, args,unet_model,seg_model,data_len,sub_class
         recon_normal_t = image_transform(pred_x_0_normal.detach().cpu().numpy()[0])
         recon_noisier_t = image_transform(pred_x_0_noisier.detach().cpu().numpy()[0])
 
-        # Fix: Handle image_path properly - extract string from list/tuple
-        img_path_str = image_path[0] if isinstance(image_path, (list, tuple)) else image_path
+        # Fix: Handle image_path properly - extract string from nested structures
+        if isinstance(image_path, (list, tuple)):
+            # Keep extracting until we get a string
+            img_path_str = image_path[0]
+            while isinstance(img_path_str, (list, tuple)) and len(img_path_str) > 0:
+                img_path_str = img_path_str[0]
+        else:
+            img_path_str = image_path
+        
+        # Ensure we have a string before calling split
+        if not isinstance(img_path_str, str):
+            img_path_str = str(img_path_str)
+            
         savename = img_path_str.split("/")
         savename = "_".join(savename[-4:])
         savename = os.path.join(f'{args["output_path"]}/metrics/ARGS={args["arg_num"]}/{sub_class}/visualization_{normal_t}_{noiser_t}_{args["condition_w"]}condition_{checkpoint_type}ck', savename)
