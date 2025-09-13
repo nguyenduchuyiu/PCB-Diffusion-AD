@@ -55,7 +55,7 @@ class BinaryFocalLoss(nn.Module):
         else:
             return F_loss
 
-def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_class,class_type,device ):
+def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_class,class_type,device, num_gpus=1):
    
     in_channels = args["channels"]
     unet_model = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
@@ -73,6 +73,11 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
 
     seg_model=SegmentationSubNetwork(in_channels=6, out_channels=1).to(device)
 
+    # Enable multi-GPU training if available
+    if num_gpus > 1:
+        print(f"Wrapping models with DataParallel for {num_gpus} GPUs")
+        unet_model = torch.nn.DataParallel(unet_model)
+        seg_model = torch.nn.DataParallel(seg_model)
 
     optimizer_ddpm = optim.Adam( unet_model.parameters(), lr=args['diffusion_lr'],weight_decay=args['weight_decay'])
     
@@ -226,12 +231,16 @@ def eval(testing_dataset_loader,args,unet_model,seg_model,data_len,sub_class,dev
 
 def save(unet_model,seg_model, args,final,epoch,sub_class):
     
+    # Handle DataParallel models - save the underlying module
+    unet_state_dict = unet_model.module.state_dict() if hasattr(unet_model, 'module') else unet_model.state_dict()
+    seg_state_dict = seg_model.module.state_dict() if hasattr(seg_model, 'module') else seg_model.state_dict()
+    
     if final=='last':
         torch.save(
             {
                 'n_epoch':              epoch,
-                'unet_model_state_dict': unet_model.state_dict(),
-                'seg_model_state_dict':  seg_model.state_dict(),
+                'unet_model_state_dict': unet_state_dict,
+                'seg_model_state_dict':  seg_state_dict,
                 "args":                 args
                 }, f'{args["output_path"]}/model/diff-params-ARGS={args["arg_num"]}/{sub_class}/params-{final}.pt'
             )
@@ -240,8 +249,8 @@ def save(unet_model,seg_model, args,final,epoch,sub_class):
         torch.save(
                 {
                     'n_epoch':              epoch,
-                    'unet_model_state_dict': unet_model.state_dict(),
-                    'seg_model_state_dict':  seg_model.state_dict(),
+                    'unet_model_state_dict': unet_state_dict,
+                    'seg_model_state_dict':  seg_state_dict,
                     "args":                 args
                     }, f'{args["output_path"]}/model/diff-params-ARGS={args["arg_num"]}/{sub_class}/params-{final}.pt'
                 )
@@ -250,6 +259,17 @@ def save(unet_model,seg_model, args,final,epoch,sub_class):
 
 def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Check for multiple GPUs
+    num_gpus = torch.cuda.device_count()
+    print(f"Number of available GPUs: {num_gpus}")
+    if num_gpus > 1:
+        print(f"Using {num_gpus} GPUs for training")
+    elif num_gpus == 1:
+        print("Using single GPU for training")
+    else:
+        print("Using CPU for training")
+    
     # read file from argument
     file = "args1.json"
     # load the json args
@@ -277,8 +297,15 @@ def main():
 
         print(file, args)     
 
-        data_len = len(testing_dataset) 
-        training_dataset_loader = DataLoader(training_dataset, batch_size=args['Batch_Size'],shuffle=True,num_workers=8,pin_memory=True,drop_last=True)
+        data_len = len(testing_dataset)
+        
+        # Adjust batch size for multi-GPU training
+        effective_batch_size = args['Batch_Size']
+        if num_gpus > 1:
+            effective_batch_size = args['Batch_Size'] * num_gpus
+            print(f"Adjusting batch size from {args['Batch_Size']} to {effective_batch_size} for {num_gpus} GPUs")
+        
+        training_dataset_loader = DataLoader(training_dataset, batch_size=effective_batch_size,shuffle=True,num_workers=8,pin_memory=True,drop_last=True)
         test_loader = DataLoader(testing_dataset, batch_size=1,shuffle=False, num_workers=4)
 
         # make arg specific directories
@@ -291,7 +318,7 @@ def main():
                 pass
 
     
-        train(training_dataset_loader, test_loader, args, data_len,sub_class,class_type,device )
+        train(training_dataset_loader, test_loader, args, data_len,sub_class,class_type,device, num_gpus)
 
 if __name__ == '__main__':
     

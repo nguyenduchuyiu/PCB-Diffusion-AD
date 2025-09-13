@@ -350,6 +350,16 @@ def testing(testing_dataset_loader, args,unet_model,seg_model,data_len,sub_class
 def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # Check for multiple GPUs
+    num_gpus = torch.cuda.device_count()
+    print(f"Number of available GPUs: {num_gpus}")
+    if num_gpus > 1:
+        print(f"Using {num_gpus} GPUs for evaluation")
+    elif num_gpus == 1:
+        print("Using single GPU for evaluation")
+    else:
+        print("Using CPU for evaluation")
     mvtec_classes = ['carpet', 'grid', 'leather', 'tile', 'wood', 'bottle', 'cable', 'capsule', 'hazelnut', 'metal_nut', 'pill', 'screw',
      'toothbrush', 'transistor', 'zipper']
     mpdd_classes = ['bracket_black', 'bracket_brown', 'bracket_white', 'connector', 'metal_plate', 'tubes'] 
@@ -378,12 +388,20 @@ def main():
 
         seg_model=SegmentationSubNetwork(in_channels=6, out_channels=1).to(device)
 
+        # Load model states
         unet_model.load_state_dict(output["unet_model_state_dict"])
         unet_model.to(device)
-        unet_model.eval()
-
+        
         seg_model.load_state_dict(output["seg_model_state_dict"])
         seg_model.to(device)
+        
+        # Enable multi-GPU for evaluation if available
+        if num_gpus > 1:
+            print(f"Wrapping models with DataParallel for {num_gpus} GPUs")
+            unet_model = torch.nn.DataParallel(unet_model)
+            seg_model = torch.nn.DataParallel(seg_model)
+        
+        unet_model.eval()
         seg_model.eval()
 
         print("EPOCH:",output['n_epoch'])
