@@ -599,12 +599,15 @@ def save(unet_model,seg_model, args,final,epoch,sub_class, training_history=None
     unet_state_dict = unet_model.module.state_dict() if hasattr(unet_model, 'module') else unet_model.state_dict()
     seg_state_dict = seg_model.module.state_dict() if hasattr(seg_model, 'module') else seg_model.state_dict()
     
+    # Convert defaultdict to regular dict for PyTorch 2.6+ compatibility
+    args_dict = dict(args) if hasattr(args, 'keys') else args
+    
     # Base checkpoint data
     checkpoint_data = {
         'n_epoch':              epoch,
         'unet_model_state_dict': unet_state_dict,
         'seg_model_state_dict':  seg_state_dict,
-        "args":                 args
+        "args":                 args_dict
     }
     
     # Add training history for resume functionality

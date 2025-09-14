@@ -217,6 +217,13 @@ def testing(testing_dataset_loader, args,unet_model,seg_model,data_len,sub_class
     
     
     print("data_len",data_len)
+    
+    # Check if dataset is empty
+    if data_len == 0:
+        print("⚠️  WARNING: Test dataset is empty! Cannot compute AUROC.")
+        print("   - Skipping evaluation")
+        return 0.0, 0.0  # Return dummy scores
+    
     total_image_pred = np.array([])
     total_image_gt =np.array([])
     total_pixel_gt=np.array([])
@@ -356,20 +363,44 @@ def testing(testing_dataset_loader, args,unet_model,seg_model,data_len,sub_class
 
 
     
-    auroc_image = round(roc_auc_score(total_image_gt,total_image_pred),3)*100
-    print("Image AUC-ROC: " ,auroc_image)
+    # Check if we have any data after processing
+    if len(total_image_gt) == 0 or len(total_pixel_gt) == 0:
+        print("⚠️  WARNING: No test samples processed! Cannot compute AUROC.")
+        print(f"   - Image samples: {len(total_image_gt)}")
+        print(f"   - Pixel samples: {len(total_pixel_gt)}")
+        return 0.0, 0.0
     
+    print(f"📊 Processed {len(total_image_gt)} images, {len(total_pixel_gt)} pixels")
     
-    auroc_pixel =  round(roc_auc_score(total_pixel_gt, total_pixel_pred),3)*100
-    print("Pixel AUC-ROC:" ,auroc_pixel)
+    try:
+        auroc_image = round(roc_auc_score(total_image_gt,total_image_pred),3)*100
+        print("Image AUC-ROC: " ,auroc_image)
+    except ValueError as e:
+        print(f"❌ Error computing image AUROC: {e}")
+        auroc_image = 0.0
+    
+    try:
+        auroc_pixel =  round(roc_auc_score(total_pixel_gt, total_pixel_pred),3)*100
+        print("Pixel AUC-ROC:" ,auroc_pixel)
+    except ValueError as e:
+        print(f"❌ Error computing pixel AUROC: {e}")
+        auroc_pixel = 0.0
 
-    ap_pixel =  round(average_precision_score(total_pixel_gt, total_pixel_pred),3)*100
-    print("Pixel-AP:",ap_pixel) 
+    try:
+        ap_pixel =  round(average_precision_score(total_pixel_gt, total_pixel_pred),3)*100
+        print("Pixel-AP:",ap_pixel)
+    except ValueError as e:
+        print(f"❌ Error computing pixel AP: {e}")
+        ap_pixel = 0.0 
     
 
 
-    aupro_pixel = round(pixel_pro(gt_matrix_pixel,pred_matrix_pixel),3)*100
-    print("Pixel-AUPRO:" ,aupro_pixel)
+    try:
+        aupro_pixel = round(pixel_pro(gt_matrix_pixel,pred_matrix_pixel),3)*100
+        print("Pixel-AUPRO:" ,aupro_pixel)
+    except Exception as e:
+        print(f"❌ Error computing pixel AUPRO: {e}")
+        aupro_pixel = 0.0
     
     temp = {"classname":[sub_class],"Image-AUROC": [auroc_image],"Pixel-AUROC":[auroc_pixel],"Pixel-AUPRO":[aupro_pixel],"Pixel_AP":[ap_pixel]}
     df_class = pd.DataFrame(temp)
