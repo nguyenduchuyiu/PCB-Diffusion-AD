@@ -78,88 +78,26 @@ def print_model_info(model, model_name):
 def plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_loss_list, 
                         train_smL1_loss_list, loss_x_list, image_auroc_list, 
                         pixel_auroc_list, performance_x_list, sub_class, args, inline=False):
-    """Plot and optionally save learning curves"""
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    """Plot simple loss curves only - minimal memory usage"""
+    fig, ax = plt.subplots(1, 1, figsize=(10, 6))
     
-    # Plot losses
+    # Plot losses only
     if len(loss_x_list) > 0:
-        ax1.plot(loss_x_list, train_loss_list, 'b-', label='Total Loss', linewidth=2)
-        ax1.plot(loss_x_list, train_noise_loss_list, 'r-', label='Noise Loss')
-        ax1.plot(loss_x_list, train_focal_loss_list, 'g-', label='Focal Loss')
-        ax1.plot(loss_x_list, train_smL1_loss_list, 'm-', label='SmoothL1 Loss')
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Loss')
-        ax1.set_title('Training Losses')
-        ax1.legend()
-        ax1.grid(True)
-        ax1.set_yscale('log')  # Log scale for better visualization
+        ax.plot(loss_x_list, train_loss_list, 'b-', label='Total Loss', linewidth=2)
+        ax.plot(loss_x_list, train_noise_loss_list, 'r-', label='Noise Loss')
+        ax.plot(loss_x_list, train_focal_loss_list, 'g-', label='Focal Loss')
+        ax.plot(loss_x_list, train_smL1_loss_list, 'm-', label='SmoothL1 Loss')
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('Loss')
+        current_epoch = loss_x_list[-1] if loss_x_list else 0
+        current_loss = train_loss_list[-1] if train_loss_list else 0
+        ax.set_title(f'{sub_class} - Training Losses (Epoch {current_epoch}, Loss: {current_loss:.4f})')
+        ax.legend()
+        ax.grid(True)
+        ax.set_yscale('log')
     else:
-        ax1.text(0.5, 0.5, 'No loss data yet', ha='center', va='center', transform=ax1.transAxes)
-        ax1.set_title('Training Losses (Waiting for data...)')
-    
-    # Plot AUROC curves
-    if len(performance_x_list) > 0 and len(image_auroc_list) > 0:
-        ax2.plot(performance_x_list, image_auroc_list, 'b-o', label='Image AUROC', linewidth=2)
-        ax2.plot(performance_x_list, pixel_auroc_list, 'r-o', label='Pixel AUROC', linewidth=2)
-        ax2.set_xlabel('Epoch')
-        ax2.set_ylabel('AUROC (%)')
-        ax2.set_title('Performance Metrics')
-        ax2.legend()
-        ax2.grid(True)
-        ax2.set_ylim([0, 100])
-    else:
-        ax2.text(0.5, 0.5, 'Performance metrics\n(Available after epoch 50)', 
-                ha='center', va='center', transform=ax2.transAxes)
-        ax2.set_title('Performance Metrics (Waiting for evaluation...)')
-        ax2.grid(True)
-    
-    # Training info
-    current_epoch = loss_x_list[-1] if loss_x_list else 0
-    current_loss = train_loss_list[-1] if train_loss_list else 0
-    ax3.text(0.5, 0.5, f'Class: {sub_class}\nCurrent Epoch: {current_epoch}\nCurrent Loss: {current_loss:.4f}\nBatch Size: {args["Batch_Size"]}\nGrad Accum: {args.get("gradient_accumulation_steps", 1)}', 
-             ha='center', va='center', transform=ax3.transAxes, fontsize=11)
-    ax3.set_title('Training Status')
-    ax3.axis('off')
-    
-    # Loss components ratio (only if we have data)
-    if len(loss_x_list) > 0 and train_loss_list:
-        total_loss_last = train_loss_list[-1] if train_loss_list else 0
-        if total_loss_last > 0:
-            noise_ratio = (train_noise_loss_list[-1] / total_loss_last * 100) if train_noise_loss_list else 0
-            focal_ratio = (train_focal_loss_list[-1] / total_loss_last * 100) if train_focal_loss_list else 0
-            smL1_ratio = (train_smL1_loss_list[-1] / total_loss_last * 100) if train_smL1_loss_list else 0
-            
-            # Filter out zero values
-            labels = []
-            sizes = []
-            colors = []
-            
-            if noise_ratio > 0:
-                labels.append('Noise Loss')
-                sizes.append(noise_ratio)
-                colors.append('red')
-            if focal_ratio > 0:
-                labels.append('Focal Loss')
-                sizes.append(focal_ratio)
-                colors.append('green')
-            if smL1_ratio > 0:
-                labels.append('SmoothL1 Loss')
-                sizes.append(smL1_ratio)
-                colors.append('magenta')
-            
-            if sizes:  # Only plot if we have data
-                ax4.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
-                ax4.set_title(f'Loss Components (Epoch {current_epoch})')
-            else:
-                ax4.text(0.5, 0.5, 'No loss breakdown\navailable yet', 
-                        ha='center', va='center', transform=ax4.transAxes)
-                ax4.set_title('Loss Components')
-        else:
-            ax4.text(0.5, 0.5, 'Waiting for loss data...', ha='center', va='center', transform=ax4.transAxes)
-            ax4.set_title('Loss Components')
-    else:
-        ax4.text(0.5, 0.5, 'Waiting for loss data...', ha='center', va='center', transform=ax4.transAxes)
-        ax4.set_title('Loss Components')
+        ax.text(0.5, 0.5, 'No loss data yet', ha='center', va='center', transform=ax.transAxes)
+        ax.set_title('Training Losses (Waiting for data...)')
     
     plt.tight_layout()
     
@@ -171,7 +109,9 @@ def plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_los
         plt.close()
         # Print update
         if len(loss_x_list) > 0:
-            print(f"📊 Learning curves updated! Epoch {current_epoch}, Loss: {current_loss:.4f}")
+            current_epoch = loss_x_list[-1] if loss_x_list else 0
+            current_loss = train_loss_list[-1] if train_loss_list else 0
+            print(f"📊 Loss tracking: Epoch {current_epoch}, Loss: {current_loss:.4f}")
     else:
         # Save the plot to file
         os.makedirs(f'{args["output_path"]}/learning_curves/ARGS={args["arg_num"]}', exist_ok=True)
@@ -181,7 +121,9 @@ def plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_los
         
         # Print update
         if len(loss_x_list) > 0:
-            print(f"📊 Learning curves updated! Epoch {current_epoch}, Loss: {current_loss:.4f}")
+            current_epoch = loss_x_list[-1] if loss_x_list else 0
+            current_loss = train_loss_list[-1] if train_loss_list else 0
+            print(f"📊 Loss tracking: Epoch {current_epoch}, Loss: {current_loss:.4f}")
             print(f"   📁 Saved to: outputs/learning_curves/ARGS={args['arg_num']}/{sub_class}_learning_curves.png")
 
 def is_jupyter_environment():
@@ -440,10 +382,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
             
     save(unet_model,seg_model, args=args,final='last',epoch=args['EPOCHS'],sub_class=sub_class)
 
-    # Plot learning curves (final)
-    plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_loss_list, 
-                        train_smL1_loss_list, loss_x_list, image_auroc_list, 
-                        pixel_auroc_list, performance_x_list, sub_class, args, inline=use_inline_plots)
+    # Skip final plot to save memory
     
     # Save training statistics
     training_stats = {
@@ -458,9 +397,8 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     with open(f'{args["output_path"]}/metrics/ARGS={args["arg_num"]}/{sub_class}_training_stats.json', 'w') as f:
         json.dump(training_stats, f, indent=2)
 
-    # Save profiler results
+    # Save profiler results (text only, no plots)
     profiler.print_summary()
-    profiler.plot_metrics(inline=use_inline_plots)
     profiler.save_stats()
 
     temp = {"classname":[sub_class],"Image-AUROC": [best_image_auroc],"Pixel-AUROC":[best_pixel_auroc],"epoch":best_epoch}
