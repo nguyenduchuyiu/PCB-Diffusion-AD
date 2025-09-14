@@ -270,8 +270,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     train_focal_loss_list=[]
     train_smL1_loss_list=[]
     loss_x_list=[]
-    best_image_auroc=0.0
-    best_pixel_auroc=0.0
+    best_loss=float('inf')  # Track best (lowest) loss
     best_epoch=0
     image_auroc_list=[]
     pixel_auroc_list=[]
@@ -302,7 +301,10 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
                 train_focal_loss_list = checkpoint.get('train_focal_loss_list', [])
                 train_smL1_loss_list = checkpoint.get('train_smL1_loss_list', [])
                 loss_x_list = checkpoint.get('loss_x_list', [])
+                best_loss = checkpoint.get('best_loss', float('inf'))
+                best_epoch = checkpoint.get('best_epoch', 0)
                 print(f"📊 Loaded loss history: {len(train_loss_list)} epochs")
+                print(f"🏆 Best loss so far: {best_loss:.4f} at epoch {best_epoch + 1}")
         else:
             print(f"⚠️  No checkpoint found at {checkpoint_path}, starting from scratch")
             start_epoch = 0
@@ -465,6 +467,24 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
                                 train_smL1_loss_list, loss_x_list, image_auroc_list, 
                                 pixel_auroc_list, performance_x_list, sub_class, args, inline=use_inline_plots)
 
+        # Check if this is the best loss so far
+        if train_loss < best_loss:
+            best_loss = train_loss
+            best_epoch = epoch
+            
+            # Save best model
+            best_history = {
+                'train_loss_list': train_loss_list,
+                'train_noise_loss_list': train_noise_loss_list,
+                'train_focal_loss_list': train_focal_loss_list,
+                'train_smL1_loss_list': train_smL1_loss_list,
+                'loss_x_list': loss_x_list,
+                'best_loss': best_loss,
+                'best_epoch': best_epoch
+            }
+            save(unet_model, seg_model, args=args, final='best', epoch=epoch, sub_class=sub_class, training_history=best_history)
+            print(f"🏆 New best loss: {best_loss:.4f} at epoch {epoch + 1} - Best model saved!")
+
         # Save checkpoint every 10 epochs
         if (epoch + 1) % 10 == 0:
             checkpoint_history = {
@@ -472,7 +492,9 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
                 'train_noise_loss_list': train_noise_loss_list,
                 'train_focal_loss_list': train_focal_loss_list,
                 'train_smL1_loss_list': train_smL1_loss_list,
-                'loss_x_list': loss_x_list
+                'loss_x_list': loss_x_list,
+                'best_loss': best_loss,
+                'best_epoch': best_epoch
             }
             save(unet_model, seg_model, args=args, final='last', epoch=epoch, sub_class=sub_class, training_history=checkpoint_history)
             print(f"💾 Checkpoint saved at epoch {epoch + 1}")
@@ -486,7 +508,9 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
         'train_noise_loss_list': train_noise_loss_list,
         'train_focal_loss_list': train_focal_loss_list,
         'train_smL1_loss_list': train_smL1_loss_list,
-        'loss_x_list': loss_x_list
+        'loss_x_list': loss_x_list,
+        'best_loss': best_loss,
+        'best_epoch': best_epoch
     }
     save(unet_model,seg_model, args=args,final='last',epoch=args['EPOCHS']-1,sub_class=sub_class, training_history=final_training_history)
 
@@ -497,7 +521,8 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     training_stats = {
         'total_epochs': len(train_loss_list),
         'final_loss': final_loss,
-        'min_loss': min(train_loss_list) if train_loss_list else 0,
+        'best_loss': best_loss,
+        'best_epoch': best_epoch + 1,  # Human-readable (1-indexed)
         'avg_epoch_time': np.mean(epoch_times) if epoch_times else 0,
         'total_training_time': sum(epoch_times) if epoch_times else 0
     }
