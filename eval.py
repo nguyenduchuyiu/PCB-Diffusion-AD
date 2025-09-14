@@ -470,8 +470,10 @@ def main():
 
             print("EPOCH:", output['n_epoch'])
 
+            # Build correct path like in train.py
+            subclass_path = os.path.join(args["data_root_path"], args['data_name'], sub_class)
             testing_dataset = RealIADTestDataset(
-                args["data_root_path"], sub_class, img_size=args["img_size"]
+                subclass_path, sub_class, img_size=args["img_size"]
             )
             class_type = args['data_name']
                     
