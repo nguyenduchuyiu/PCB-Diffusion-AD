@@ -19,8 +19,8 @@ texture_list = ['carpet', 'zipper', 'leather', 'tile', 'wood','grid',
 
 class RealIADTestDataset(Dataset):
     def __init__(self, data_path, classname, img_size):
-        # Fix the path construction to include RealIAD and classname
-        self.root_dir = os.path.join(data_path, 'RealIAD', classname, 'test')
+        # data_path already includes RealIAD/classname, just add test
+        self.root_dir = os.path.join(data_path, 'test')
         self.images = sorted(glob.glob(self.root_dir + "/*/*.jpg"))
         self.resize_shape = [img_size[0], img_size[1]]
 

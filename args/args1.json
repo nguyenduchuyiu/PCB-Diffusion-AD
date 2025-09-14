@@ -31,5 +31,6 @@
   "use_mixed_precision": true,
   "channel_mults": [1, 1, 2, 2, 4, 4],
   "loss_weight": "uniform",
-  "loss-type": "l2"
+  "loss-type": "l2",
+  "resume_training": false
 }

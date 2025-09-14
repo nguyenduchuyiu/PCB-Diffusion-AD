@@ -162,6 +162,10 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     else:
         print("📊 Using file-based plots")
     
+    # Check for resume training
+    resume_from_checkpoint = args.get('resume_training', False)
+    start_epoch = 0
+    
     # Initialize profiler
     profiler = PerformanceProfiler(log_dir=f'{args["output_path"]}/profiling/ARGS={args["arg_num"]}/{sub_class}')
     
@@ -218,10 +222,9 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     loss_smL1= nn.SmoothL1Loss().to(device)
     
 
-    tqdm_epoch = range(0, args['EPOCHS'] )
     scheduler_seg =optim.lr_scheduler.CosineAnnealingLR(optimizer_seg, T_max=10, eta_min=0, last_epoch=- 1, verbose=False)
     
-    # dataset loop
+    # Initialize training variables
     train_loss_list=[]
     train_noise_loss_list=[]
     train_focal_loss_list=[]
@@ -233,6 +236,44 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     image_auroc_list=[]
     pixel_auroc_list=[]
     performance_x_list=[]
+    
+    # Resume training if checkpoint exists
+    if resume_from_checkpoint:
+        checkpoint_path = f'{args["output_path"]}/model/diff-params-ARGS={args["arg_num"]}/{sub_class}/params-last.pt'
+        if os.path.exists(checkpoint_path):
+            print(f"🔄 Resuming training from {checkpoint_path}")
+            checkpoint = torch.load(checkpoint_path, map_location=device)
+            
+            # Load model states
+            if hasattr(unet_model, 'module'):
+                unet_model.module.load_state_dict(checkpoint['unet_model_state_dict'])
+                seg_model.module.load_state_dict(checkpoint['seg_model_state_dict'])
+            else:
+                unet_model.load_state_dict(checkpoint['unet_model_state_dict'])
+                seg_model.load_state_dict(checkpoint['seg_model_state_dict'])
+            
+            start_epoch = checkpoint['n_epoch']
+            print(f"🎯 Resuming from epoch {start_epoch}")
+            
+            # Load training history if available
+            if 'train_loss_list' in checkpoint:
+                train_loss_list = checkpoint.get('train_loss_list', [])
+                train_noise_loss_list = checkpoint.get('train_noise_loss_list', [])
+                train_focal_loss_list = checkpoint.get('train_focal_loss_list', [])
+                train_smL1_loss_list = checkpoint.get('train_smL1_loss_list', [])
+                loss_x_list = checkpoint.get('loss_x_list', [])
+                image_auroc_list = checkpoint.get('image_auroc_list', [])
+                pixel_auroc_list = checkpoint.get('pixel_auroc_list', [])
+                performance_x_list = checkpoint.get('performance_x_list', [])
+                best_image_auroc = checkpoint.get('best_image_auroc', 0.0)
+                best_pixel_auroc = checkpoint.get('best_pixel_auroc', 0.0)
+                best_epoch = checkpoint.get('best_epoch', 0)
+                print(f"📊 Loaded training history: {len(train_loss_list)} epochs")
+        else:
+            print(f"⚠️  No checkpoint found at {checkpoint_path}, starting from scratch")
+            start_epoch = 0
+    
+    tqdm_epoch = range(start_epoch, args['EPOCHS'])
     
     # Performance monitoring
     epoch_times = []
@@ -367,20 +408,50 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
                                 pixel_auroc_list, performance_x_list, sub_class, args, inline=use_inline_plots)
 
 
-        if (epoch+1) % 50==0 and epoch > 0:
-            temp_image_auroc,temp_pixel_auroc= eval(testing_dataset_loader,args,unet_model,seg_model,data_len,sub_class,device)
-            image_auroc_list.append(temp_image_auroc)
-            pixel_auroc_list.append(temp_pixel_auroc)
-            performance_x_list.append(int(epoch))
-            if(temp_image_auroc+temp_pixel_auroc>=best_image_auroc+best_pixel_auroc):
-                if temp_image_auroc>=best_image_auroc:
-                    save(unet_model,seg_model, args=args,final='best',epoch=epoch,sub_class=sub_class)
-                    best_image_auroc = temp_image_auroc
-                    best_pixel_auroc = temp_pixel_auroc
-                    best_epoch = epoch
+        if (epoch+1) % 10==0 and epoch > 0:
+            if data_len > 0:  # Only evaluate if test data exists
+                temp_image_auroc,temp_pixel_auroc= eval(testing_dataset_loader,args,unet_model,seg_model,data_len,sub_class,device)
+                image_auroc_list.append(temp_image_auroc)
+                pixel_auroc_list.append(temp_pixel_auroc)
+                performance_x_list.append(int(epoch))
+                if(temp_image_auroc+temp_pixel_auroc>=best_image_auroc+best_pixel_auroc):
+                    if temp_image_auroc>=best_image_auroc:
+                        training_history = {
+                            'train_loss_list': train_loss_list,
+                            'train_noise_loss_list': train_noise_loss_list,
+                            'train_focal_loss_list': train_focal_loss_list,
+                            'train_smL1_loss_list': train_smL1_loss_list,
+                            'loss_x_list': loss_x_list,
+                            'image_auroc_list': image_auroc_list,
+                            'pixel_auroc_list': pixel_auroc_list,
+                            'performance_x_list': performance_x_list,
+                            'best_image_auroc': temp_image_auroc,
+                            'best_pixel_auroc': temp_pixel_auroc,
+                            'best_epoch': epoch
+                        }
+                        save(unet_model,seg_model, args=args,final='best',epoch=epoch,sub_class=sub_class, training_history=training_history)
+                        best_image_auroc = temp_image_auroc
+                        best_pixel_auroc = temp_pixel_auroc
+                        best_epoch = epoch
+            else:
+                print(f"⚠️  Skipping evaluation at epoch {epoch+1} - no test data available")
                 
             
-    save(unet_model,seg_model, args=args,final='last',epoch=args['EPOCHS'],sub_class=sub_class)
+    # Save final checkpoint with training history
+    final_training_history = {
+        'train_loss_list': train_loss_list,
+        'train_noise_loss_list': train_noise_loss_list,
+        'train_focal_loss_list': train_focal_loss_list,
+        'train_smL1_loss_list': train_smL1_loss_list,
+        'loss_x_list': loss_x_list,
+        'image_auroc_list': image_auroc_list,
+        'pixel_auroc_list': pixel_auroc_list,
+        'performance_x_list': performance_x_list,
+        'best_image_auroc': best_image_auroc,
+        'best_pixel_auroc': best_pixel_auroc,
+        'best_epoch': best_epoch
+    }
+    save(unet_model,seg_model, args=args,final='last',epoch=args['EPOCHS']-1,sub_class=sub_class, training_history=final_training_history)
 
     # Skip final plot to save memory
     
@@ -462,31 +533,25 @@ def eval(testing_dataset_loader,args,unet_model,seg_model,data_len,sub_class,dev
     return auroc_image,auroc_pixel
 
 
-def save(unet_model,seg_model, args,final,epoch,sub_class):
+def save(unet_model,seg_model, args,final,epoch,sub_class, training_history=None):
     
     # Handle DataParallel models - save the underlying module
     unet_state_dict = unet_model.module.state_dict() if hasattr(unet_model, 'module') else unet_model.state_dict()
     seg_state_dict = seg_model.module.state_dict() if hasattr(seg_model, 'module') else seg_model.state_dict()
     
-    if final=='last':
-        torch.save(
-            {
-                'n_epoch':              epoch,
-                'unet_model_state_dict': unet_state_dict,
-                'seg_model_state_dict':  seg_state_dict,
-                "args":                 args
-                }, f'{args["output_path"]}/model/diff-params-ARGS={args["arg_num"]}/{sub_class}/params-{final}.pt'
-            )
+    # Base checkpoint data
+    checkpoint_data = {
+        'n_epoch':              epoch,
+        'unet_model_state_dict': unet_state_dict,
+        'seg_model_state_dict':  seg_state_dict,
+        "args":                 args
+    }
     
-    else:
-        torch.save(
-                {
-                    'n_epoch':              epoch,
-                    'unet_model_state_dict': unet_state_dict,
-                    'seg_model_state_dict':  seg_state_dict,
-                    "args":                 args
-                    }, f'{args["output_path"]}/model/diff-params-ARGS={args["arg_num"]}/{sub_class}/params-{final}.pt'
-                )
+    # Add training history for resume functionality
+    if training_history is not None:
+        checkpoint_data.update(training_history)
+    
+    torch.save(checkpoint_data, f'{args["output_path"]}/model/diff-params-ARGS={args["arg_num"]}/{sub_class}/params-{final}.pt')
     
     
 
@@ -530,6 +595,12 @@ def main():
         print(file, args)     
 
         data_len = len(testing_dataset)
+        
+        # Check if test dataset is empty
+        if data_len == 0:
+            print(f"⚠️  WARNING: Test dataset for {sub_class} is empty!")
+            print(f"   - Training will continue but no evaluation will be performed")
+            print(f"   - Check data path: {args['data_root_path']}/{args['data_name']}/{sub_class}")
         
         # Calculate effective batch size considering multi-GPU and gradient accumulation
         base_batch_size = args['Batch_Size']
