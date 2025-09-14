@@ -9,6 +9,8 @@ from PIL import Image
 from torchvision import transforms
 import random
 from data.perlin import rand_perlin_2d_np
+import functools
+import time
 
 texture_list = ['carpet', 'zipper', 'leather', 'tile', 'wood','grid',
                 'Class1', 'Class2', 'Class3', 'Class4', 'Class5',
@@ -69,6 +71,13 @@ class RealIADTrainDataset(Dataset):
 
         self.image_paths = sorted(glob.glob(self.root_dir + "/*.jpg"))
         self.anomaly_source_paths = sorted(glob.glob(self.anomaly_source_path + "/images/*/*.jpg"))
+        
+        # Cache for preprocessed data
+        self._image_cache = {}
+        self._thresh_cache = {}
+        self._cache_enabled = True
+        
+        print(f"Dataset initialized with {len(self.image_paths)} training images and {len(self.anomaly_source_paths)} anomaly sources")
 
         # Giữ nguyên các augmenters
         self.augmenters = [iaa.GammaContrast((0.5, 2.0), per_channel=True),
@@ -187,13 +196,24 @@ class RealIADTrainDataset(Dataset):
 
             return augmented_image, msk, np.array([has_anomaly], dtype=np.float32)
         
-    def __getitem__(self, idx):
-        image_path = self.image_paths[idx]
+    def _load_and_cache_image(self, image_path):
+        """Load and cache preprocessed image"""
+        if self._cache_enabled and image_path in self._image_cache:
+            return self._image_cache[image_path]
+        
         image = cv2.cvtColor(cv2.imread(image_path), cv2.COLOR_BGR2RGB)
         image = cv2.resize(image, dsize=(self.resize_shape[1], self.resize_shape[0]))
-        cv2_image = image.copy()
-
-        thresh_path = self.get_foreground(image_path)
+        
+        if self._cache_enabled:
+            self._image_cache[image_path] = image
+            
+        return image
+    
+    def _load_and_cache_thresh(self, thresh_path):
+        """Load and cache threshold mask"""
+        if self._cache_enabled and thresh_path in self._thresh_cache:
+            return self._thresh_cache[thresh_path]
+        
         thresh = cv2.imread(thresh_path, 0)
         
         # Xử lý trường hợp file mask không tồn tại
@@ -203,9 +223,24 @@ class RealIADTrainDataset(Dataset):
             thresh = np.ones((self.resize_shape[0], self.resize_shape[1]), dtype=np.uint8) * 255
         else:
             thresh = cv2.resize(thresh, dsize=(self.resize_shape[1], self.resize_shape[0]))
-            
+        
         thresh = np.array(thresh).astype(np.float32) / 255.0
+        
+        if self._cache_enabled:
+            self._thresh_cache[thresh_path] = thresh
+            
+        return thresh
+
+    def __getitem__(self, idx):
+        image_path = self.image_paths[idx]
+        
+        # Use cached loading
+        image = self._load_and_cache_image(image_path)
+        cv2_image = image.copy()
         image = np.array(image).astype(np.float32) / 255.0
+
+        thresh_path = self.get_foreground(image_path)
+        thresh = self._load_and_cache_thresh(thresh_path)
 
         anomaly_source_idx = torch.randint(0, len(self.anomaly_source_paths), (1,)).item()
         anomaly_path = self.anomaly_source_paths[anomaly_source_idx]

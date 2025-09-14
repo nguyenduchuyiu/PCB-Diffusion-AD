@@ -21,6 +21,10 @@ from skimage.measure import label, regionprops
 from sklearn.metrics import roc_auc_score,auc,average_precision_score
 import pandas as pd
 from collections import defaultdict
+import time
+import psutil
+import gc
+from utils.profiler import PerformanceProfiler
 
 def weights_init(m):
         classname = m.__class__.__name__
@@ -71,8 +75,129 @@ def print_model_info(model, model_name):
     
     return total_params
 
+def plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_loss_list, 
+                        train_smL1_loss_list, loss_x_list, image_auroc_list, 
+                        pixel_auroc_list, performance_x_list, sub_class, args):
+    """Plot and save learning curves"""
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
+    
+    # Plot losses
+    if len(loss_x_list) > 0:
+        ax1.plot(loss_x_list, train_loss_list, 'b-', label='Total Loss', linewidth=2)
+        ax1.plot(loss_x_list, train_noise_loss_list, 'r-', label='Noise Loss')
+        ax1.plot(loss_x_list, train_focal_loss_list, 'g-', label='Focal Loss')
+        ax1.plot(loss_x_list, train_smL1_loss_list, 'm-', label='SmoothL1 Loss')
+        ax1.set_xlabel('Epoch')
+        ax1.set_ylabel('Loss')
+        ax1.set_title('Training Losses')
+        ax1.legend()
+        ax1.grid(True)
+        ax1.set_yscale('log')  # Log scale for better visualization
+    else:
+        ax1.text(0.5, 0.5, 'No loss data yet', ha='center', va='center', transform=ax1.transAxes)
+        ax1.set_title('Training Losses (Waiting for data...)')
+    
+    # Plot AUROC curves
+    if len(performance_x_list) > 0 and len(image_auroc_list) > 0:
+        ax2.plot(performance_x_list, image_auroc_list, 'b-o', label='Image AUROC', linewidth=2)
+        ax2.plot(performance_x_list, pixel_auroc_list, 'r-o', label='Pixel AUROC', linewidth=2)
+        ax2.set_xlabel('Epoch')
+        ax2.set_ylabel('AUROC (%)')
+        ax2.set_title('Performance Metrics')
+        ax2.legend()
+        ax2.grid(True)
+        ax2.set_ylim([0, 100])
+    else:
+        ax2.text(0.5, 0.5, 'Performance metrics\n(Available after epoch 50)', 
+                ha='center', va='center', transform=ax2.transAxes)
+        ax2.set_title('Performance Metrics (Waiting for evaluation...)')
+        ax2.grid(True)
+    
+    # Training info
+    current_epoch = loss_x_list[-1] if loss_x_list else 0
+    current_loss = train_loss_list[-1] if train_loss_list else 0
+    ax3.text(0.5, 0.5, f'Class: {sub_class}\nCurrent Epoch: {current_epoch}\nCurrent Loss: {current_loss:.4f}\nBatch Size: {args["Batch_Size"]}\nGrad Accum: {args.get("gradient_accumulation_steps", 1)}', 
+             ha='center', va='center', transform=ax3.transAxes, fontsize=11)
+    ax3.set_title('Training Status')
+    ax3.axis('off')
+    
+    # Loss components ratio (only if we have data)
+    if len(loss_x_list) > 0 and train_loss_list:
+        total_loss_last = train_loss_list[-1] if train_loss_list else 0
+        if total_loss_last > 0:
+            noise_ratio = (train_noise_loss_list[-1] / total_loss_last * 100) if train_noise_loss_list else 0
+            focal_ratio = (train_focal_loss_list[-1] / total_loss_last * 100) if train_focal_loss_list else 0
+            smL1_ratio = (train_smL1_loss_list[-1] / total_loss_last * 100) if train_smL1_loss_list else 0
+            
+            # Filter out zero values
+            labels = []
+            sizes = []
+            colors = []
+            
+            if noise_ratio > 0:
+                labels.append('Noise Loss')
+                sizes.append(noise_ratio)
+                colors.append('red')
+            if focal_ratio > 0:
+                labels.append('Focal Loss')
+                sizes.append(focal_ratio)
+                colors.append('green')
+            if smL1_ratio > 0:
+                labels.append('SmoothL1 Loss')
+                sizes.append(smL1_ratio)
+                colors.append('magenta')
+            
+            if sizes:  # Only plot if we have data
+                ax4.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
+                ax4.set_title(f'Loss Components (Epoch {current_epoch})')
+            else:
+                ax4.text(0.5, 0.5, 'No loss breakdown\navailable yet', 
+                        ha='center', va='center', transform=ax4.transAxes)
+                ax4.set_title('Loss Components')
+        else:
+            ax4.text(0.5, 0.5, 'Waiting for loss data...', ha='center', va='center', transform=ax4.transAxes)
+            ax4.set_title('Loss Components')
+    else:
+        ax4.text(0.5, 0.5, 'Waiting for loss data...', ha='center', va='center', transform=ax4.transAxes)
+        ax4.set_title('Loss Components')
+    
+    plt.tight_layout()
+    
+    # Save the plot
+    os.makedirs(f'{args["output_path"]}/learning_curves/ARGS={args["arg_num"]}', exist_ok=True)
+    plt.savefig(f'{args["output_path"]}/learning_curves/ARGS={args["arg_num"]}/{sub_class}_learning_curves.png', 
+                dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Print update
+    if len(loss_x_list) > 0:
+        print(f"📊 Learning curves updated! Epoch {current_epoch}, Loss: {current_loss:.4f}")
+        print(f"   📁 Saved to: outputs/learning_curves/ARGS={args['arg_num']}/{sub_class}_learning_curves.png")
+
+def monitor_system_resources():
+    """Monitor system resources"""
+    # CPU usage
+    cpu_percent = psutil.cpu_percent(interval=1)
+    
+    # Memory usage
+    memory = psutil.virtual_memory()
+    memory_percent = memory.percent
+    memory_available_gb = memory.available / (1024**3)
+    
+    # GPU memory (if available)
+    gpu_memory_info = ""
+    if torch.cuda.is_available():
+        gpu_memory_allocated = torch.cuda.memory_allocated() / (1024**3)
+        gpu_memory_reserved = torch.cuda.memory_reserved() / (1024**3)
+        gpu_memory_info = f" | GPU: {gpu_memory_allocated:.2f}GB allocated, {gpu_memory_reserved:.2f}GB reserved"
+    
+    return f"CPU: {cpu_percent:.1f}% | RAM: {memory_percent:.1f}% ({memory_available_gb:.2f}GB free){gpu_memory_info}"
+
 def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_class,class_type,device, num_gpus=1):
-   
+    
+    # Initialize profiler
+    profiler = PerformanceProfiler(log_dir=f'{args["output_path"]}/profiling/ARGS={args["arg_num"]}/{sub_class}')
+    
     in_channels = args["channels"]
     unet_model = UNetModel(args['img_size'][0], args['base_channels'], channel_mults=args['channel_mults'], dropout=args[
                 "dropout"], n_heads=args["num_heads"], n_head_channels=args["num_head_channels"],
@@ -142,7 +267,12 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     pixel_auroc_list=[]
     performance_x_list=[]
     
+    # Performance monitoring
+    epoch_times = []
+    resource_monitor_interval = 100  # Monitor resources every 100 epochs
+    
     for epoch in tqdm_epoch:
+        epoch_start_time = time.time()
         unet_model.train()
         seg_model.train()
         train_loss = 0.0
@@ -156,14 +286,27 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
         optimizer_seg.zero_grad()
         
         for i, sample in enumerate(tbar):
+            batch_start_time = time.time()
             
-            aug_image=sample['augmented_image'].to(device)
-            anomaly_mask = sample["anomaly_mask"].to(device)
-            anomaly_label = sample["has_anomaly"].to(device).squeeze()
+            # Profile data loading
+            with profiler.timer('data_loading'):
+                aug_image=sample['augmented_image'].to(device)
+                anomaly_mask = sample["anomaly_mask"].to(device)
+                anomaly_label = sample["has_anomaly"].to(device).squeeze()
 
-            # Mixed precision forward pass
-            if use_mixed_precision:
-                with autocast('cuda'):
+            # Profile forward pass
+            with profiler.timer('forward_pass'):
+                # Mixed precision forward pass
+                if use_mixed_precision:
+                    with autocast('cuda'):
+                        noise_loss, pred_x0,normal_t,x_normal_t,x_noiser_t = ddpm_sample.norm_guided_one_step_denoising(unet_model, aug_image, anomaly_label,args)
+                        pred_mask = seg_model(torch.cat((aug_image, pred_x0), dim=1)) 
+
+                        #loss
+                        focal_loss = loss_focal(pred_mask,anomaly_mask)
+                        smL1_loss = loss_smL1(pred_mask, anomaly_mask)
+                        loss = (noise_loss + 5*focal_loss + smL1_loss) / gradient_accumulation_steps
+                else:
                     noise_loss, pred_x0,normal_t,x_normal_t,x_noiser_t = ddpm_sample.norm_guided_one_step_denoising(unet_model, aug_image, anomaly_label,args)
                     pred_mask = seg_model(torch.cat((aug_image, pred_x0), dim=1)) 
 
@@ -171,34 +314,30 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
                     focal_loss = loss_focal(pred_mask,anomaly_mask)
                     smL1_loss = loss_smL1(pred_mask, anomaly_mask)
                     loss = (noise_loss + 5*focal_loss + smL1_loss) / gradient_accumulation_steps
-            else:
-                noise_loss, pred_x0,normal_t,x_normal_t,x_noiser_t = ddpm_sample.norm_guided_one_step_denoising(unet_model, aug_image, anomaly_label,args)
-                pred_mask = seg_model(torch.cat((aug_image, pred_x0), dim=1)) 
-
-                #loss
-                focal_loss = loss_focal(pred_mask,anomaly_mask)
-                smL1_loss = loss_smL1(pred_mask, anomaly_mask)
-                loss = (noise_loss + 5*focal_loss + smL1_loss) / gradient_accumulation_steps
             
-            # Mixed precision backward pass
-            if use_mixed_precision:
-                scaler.scale(loss).backward()
-            else:
-                loss.backward()
-
-            # Gradient accumulation step
-            if (i + 1) % gradient_accumulation_steps == 0:
+            # Profile backward pass
+            with profiler.timer('backward_pass'):
+                # Mixed precision backward pass
                 if use_mixed_precision:
-                    scaler.step(optimizer_ddpm)
-                    scaler.step(optimizer_seg)
-                    scaler.update()
+                    scaler.scale(loss).backward()
                 else:
-                    optimizer_ddpm.step()
-                    optimizer_seg.step()
-                
-                scheduler_seg.step()
-                optimizer_ddpm.zero_grad()
-                optimizer_seg.zero_grad()
+                    loss.backward()
+
+            # Profile optimizer step
+            with profiler.timer('optimizer_step'):
+                # Gradient accumulation step
+                if (i + 1) % gradient_accumulation_steps == 0:
+                    if use_mixed_precision:
+                        scaler.step(optimizer_ddpm)
+                        scaler.step(optimizer_seg)
+                        scaler.update()
+                    else:
+                        optimizer_ddpm.step()
+                        optimizer_seg.step()
+                    
+                    scheduler_seg.step()
+                    optimizer_ddpm.zero_grad()
+                    optimizer_seg.zero_grad()
 
             train_loss += loss.item() * gradient_accumulation_steps  # Scale back for logging
             tbar.set_description('Epoch:%d, Train loss: %.3f' % (epoch, train_loss))
@@ -207,13 +346,58 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
             train_focal_loss+=5*focal_loss.item()
             train_noise_loss+=noise_loss.item()
             
+            # Log batch metrics
+            batch_time = time.time() - batch_start_time
+            profiler.log_training_metrics(
+                epoch=epoch,
+                batch_idx=i,
+                losses={
+                    'total_loss': loss.item() * gradient_accumulation_steps,
+                    'noise_loss': noise_loss.item(),
+                    'focal_loss': focal_loss.item(),
+                    'smL1_loss': smL1_loss.item()
+                },
+                batch_time=batch_time
+            )
+            
+        # Record epoch time
+        epoch_time = time.time() - epoch_start_time
+        epoch_times.append(epoch_time)
+        
+        # Log system metrics and monitor resources
+        profiler.log_system_metrics()
+        profiler.log_training_metrics(epoch=epoch, batch_idx=0, losses={}, epoch_time=epoch_time)
+        
+        # Monitor system resources periodically
+        if epoch % resource_monitor_interval == 0 and epoch > 0:
+            resource_info = monitor_system_resources()
+            avg_epoch_time = np.mean(epoch_times[-resource_monitor_interval:]) if len(epoch_times) >= resource_monitor_interval else np.mean(epoch_times)
+            print(f"Epoch {epoch} | {resource_info} | Avg Epoch Time: {avg_epoch_time:.2f}s")
+            
+            # Check for bottlenecks
+            bottlenecks = profiler.detect_bottlenecks()
+            if bottlenecks:
+                print("⚠️  Performance bottlenecks detected:")
+                for bottleneck in bottlenecks:
+                    print(f"   - {bottleneck}")
+            
+            # Clear GPU cache periodically
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                gc.collect()
 
-        if epoch % 10 ==0  and epoch > 0:
-            train_loss_list.append(round(train_loss,3))
-            train_smL1_loss_list.append(round(train_smL1_loss,3))
-            train_focal_loss_list.append(round(train_focal_loss,3))
-            train_noise_loss_list.append(round(train_noise_loss,3))
-            loss_x_list.append(int(epoch))
+        # Save losses every epoch (always track progress)
+        train_loss_list.append(round(train_loss,3))
+        train_smL1_loss_list.append(round(train_smL1_loss,3))
+        train_focal_loss_list.append(round(train_focal_loss,3))
+        train_noise_loss_list.append(round(train_noise_loss,3))
+        loss_x_list.append(int(epoch))
+        
+        # Plot learning curves every epoch for first 10 epochs, then every 10 epochs
+        if epoch < 10 or epoch % 10 == 0:
+            plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_loss_list, 
+                                train_smL1_loss_list, loss_x_list, image_auroc_list, 
+                                pixel_auroc_list, performance_x_list, sub_class, args)
 
 
         if (epoch+1) % 50==0 and epoch > 0:
@@ -231,7 +415,28 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
             
     save(unet_model,seg_model, args=args,final='last',epoch=args['EPOCHS'],sub_class=sub_class)
 
+    # Plot and save learning curves
+    plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_loss_list, 
+                        train_smL1_loss_list, loss_x_list, image_auroc_list, 
+                        pixel_auroc_list, performance_x_list, sub_class, args)
+    
+    # Save training statistics
+    training_stats = {
+        'total_epochs': args['EPOCHS'],
+        'best_epoch': best_epoch,
+        'best_image_auroc': best_image_auroc,
+        'best_pixel_auroc': best_pixel_auroc,
+        'avg_epoch_time': np.mean(epoch_times) if epoch_times else 0,
+        'total_training_time': sum(epoch_times) if epoch_times else 0
+    }
+    
+    with open(f'{args["output_path"]}/metrics/ARGS={args["arg_num"]}/{sub_class}_training_stats.json', 'w') as f:
+        json.dump(training_stats, f, indent=2)
 
+    # Save profiler results
+    profiler.print_summary()
+    profiler.plot_metrics()
+    profiler.save_stats()
 
     temp = {"classname":[sub_class],"Image-AUROC": [best_image_auroc],"Pixel-AUROC":[best_pixel_auroc],"epoch":best_epoch}
     df_class = pd.DataFrame(temp)
@@ -380,8 +585,28 @@ def main():
         print(f"  - Total effective batch size: {total_effective_batch_size}")
 
         
-        training_dataset_loader = DataLoader(training_dataset, batch_size=dataloader_batch_size,shuffle=True,num_workers=8,pin_memory=True,drop_last=True)
-        test_loader = DataLoader(testing_dataset, batch_size=1,shuffle=False, num_workers=4)
+        # Optimize DataLoader settings
+        optimal_num_workers = min(8, os.cpu_count() // 2) if os.cpu_count() else 4
+        print(f"Using {optimal_num_workers} workers for data loading")
+        
+        training_dataset_loader = DataLoader(
+            training_dataset, 
+            batch_size=dataloader_batch_size,
+            shuffle=True,
+            num_workers=optimal_num_workers,
+            pin_memory=True,
+            drop_last=True,
+            persistent_workers=True,  # Keep workers alive between epochs
+            prefetch_factor=2  # Prefetch 2 batches per worker
+        )
+        test_loader = DataLoader(
+            testing_dataset, 
+            batch_size=1,
+            shuffle=False, 
+            num_workers=min(4, optimal_num_workers),
+            pin_memory=True,
+            persistent_workers=True
+        )
 
         # make arg specific directories
         for i in [f'{args["output_path"]}/model/diff-params-ARGS={args["arg_num"]}/{sub_class}',

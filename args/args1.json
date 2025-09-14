@@ -1,7 +1,7 @@
 {
   "img_size": [256,256],
   "Batch_Size": 4,
-  "EPOCHS": 1,
+  "EPOCHS": 3000,
   "T": 1000,
   "base_channels": 128,
   "beta_schedule": "linear",
@@ -28,5 +28,8 @@
   "eval_noisier_t":400,
   "output_path":"outputs",
   "gradient_accumulation_steps": 4,
-  "use_mixed_precision": true
+  "use_mixed_precision": true,
+  "channel_mults": [1, 1, 2, 2, 4, 4],
+  "loss_weight": "uniform",
+  "loss-type": "l2"
 }
