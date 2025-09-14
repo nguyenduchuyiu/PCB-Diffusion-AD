@@ -4,6 +4,8 @@ import os
 import json
 import matplotlib.pyplot as plt
 import numpy as np
+import signal
+import sys
 from torch import optim
 from torch.utils.data import DataLoader
 from models.Recon_subnetwork import UNetModel, update_ema_params
@@ -134,6 +136,41 @@ def is_jupyter_environment():
     except ImportError:
         return False
 
+def signal_handler(signum, frame):
+    """Handle Ctrl+C interrupt - save checkpoint before exit"""
+    print(f"\n🛑 Training interrupted! Saving checkpoint...")
+    
+    try:
+        # Save current training state
+        if 'current_models' in globals() and 'current_training_data' in globals():
+            unet_model, seg_model = current_models
+            args = current_args
+            sub_class = current_sub_class
+            training_data = current_training_data
+            
+            interrupt_history = {
+                'train_loss_list': training_data['train_loss_list'],
+                'train_noise_loss_list': training_data['train_noise_loss_list'],
+                'train_focal_loss_list': training_data['train_focal_loss_list'],
+                'train_smL1_loss_list': training_data['train_smL1_loss_list'],
+                'loss_x_list': training_data['loss_x_list']
+            }
+            
+            current_epoch = training_data['loss_x_list'][-1] if training_data['loss_x_list'] else 0
+            save(unet_model, seg_model, args=args, final='last', epoch=current_epoch, 
+                 sub_class=sub_class, training_history=interrupt_history)
+            
+            print(f"💾 Emergency checkpoint saved at epoch {current_epoch + 1}")
+            print(f"📊 You can resume training by setting 'resume_training': true")
+        else:
+            print("⚠️  No training data to save")
+            
+    except Exception as e:
+        print(f"❌ Error saving checkpoint: {e}")
+    
+    print("👋 Exiting...")
+    sys.exit(0)
+
 def monitor_system_resources():
     """Monitor system resources"""
     # CPU usage
@@ -154,6 +191,9 @@ def monitor_system_resources():
     return f"CPU: {cpu_percent:.1f}% | RAM: {memory_percent:.1f}% ({memory_available_gb:.2f}GB free){gpu_memory_info}"
 
 def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_class,class_type,device, num_gpus=1):
+    
+    # Global variables for signal handler
+    global current_models, current_args, current_sub_class, current_training_data
     
     # Check if running in Jupyter environment
     use_inline_plots = is_jupyter_environment()
@@ -222,7 +262,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     loss_smL1= nn.SmoothL1Loss().to(device)
     
 
-    scheduler_seg =optim.lr_scheduler.CosineAnnealingLR(optimizer_seg, T_max=10, eta_min=0, last_epoch=- 1, verbose=False)
+    scheduler_seg =optim.lr_scheduler.CosineAnnealingLR(optimizer_seg, T_max=10, eta_min=0, last_epoch=- 1)
     
     # Initialize training variables
     train_loss_list=[]
@@ -255,23 +295,32 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
             start_epoch = checkpoint['n_epoch']
             print(f"🎯 Resuming from epoch {start_epoch}")
             
-            # Load training history if available
+            # Load loss history if available
             if 'train_loss_list' in checkpoint:
                 train_loss_list = checkpoint.get('train_loss_list', [])
                 train_noise_loss_list = checkpoint.get('train_noise_loss_list', [])
                 train_focal_loss_list = checkpoint.get('train_focal_loss_list', [])
                 train_smL1_loss_list = checkpoint.get('train_smL1_loss_list', [])
                 loss_x_list = checkpoint.get('loss_x_list', [])
-                image_auroc_list = checkpoint.get('image_auroc_list', [])
-                pixel_auroc_list = checkpoint.get('pixel_auroc_list', [])
-                performance_x_list = checkpoint.get('performance_x_list', [])
-                best_image_auroc = checkpoint.get('best_image_auroc', 0.0)
-                best_pixel_auroc = checkpoint.get('best_pixel_auroc', 0.0)
-                best_epoch = checkpoint.get('best_epoch', 0)
-                print(f"📊 Loaded training history: {len(train_loss_list)} epochs")
+                print(f"📊 Loaded loss history: {len(train_loss_list)} epochs")
         else:
             print(f"⚠️  No checkpoint found at {checkpoint_path}, starting from scratch")
             start_epoch = 0
+    
+    # Setup Ctrl+C handler
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    # Update global variables for signal handler
+    current_models = (unet_model, seg_model)
+    current_args = args
+    current_sub_class = sub_class
+    current_training_data = {
+        'train_loss_list': train_loss_list,
+        'train_noise_loss_list': train_noise_loss_list,
+        'train_focal_loss_list': train_focal_loss_list,
+        'train_smL1_loss_list': train_smL1_loss_list,
+        'loss_x_list': loss_x_list
+    }
     
     tqdm_epoch = range(start_epoch, args['EPOCHS'])
     
@@ -401,66 +450,54 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
         train_noise_loss_list.append(round(train_noise_loss,3))
         loss_x_list.append(int(epoch))
         
+        # Update global variables for signal handler
+        current_training_data.update({
+            'train_loss_list': train_loss_list,
+            'train_noise_loss_list': train_noise_loss_list,
+            'train_focal_loss_list': train_focal_loss_list,
+            'train_smL1_loss_list': train_smL1_loss_list,
+            'loss_x_list': loss_x_list
+        })
+        
         # Plot learning curves every epoch for first 10 epochs, then every 10 epochs
         if epoch < 10 or epoch % 10 == 0:
             plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_loss_list, 
                                 train_smL1_loss_list, loss_x_list, image_auroc_list, 
                                 pixel_auroc_list, performance_x_list, sub_class, args, inline=use_inline_plots)
 
+        # Save checkpoint every 10 epochs
+        if (epoch + 1) % 10 == 0:
+            checkpoint_history = {
+                'train_loss_list': train_loss_list,
+                'train_noise_loss_list': train_noise_loss_list,
+                'train_focal_loss_list': train_focal_loss_list,
+                'train_smL1_loss_list': train_smL1_loss_list,
+                'loss_x_list': loss_x_list
+            }
+            save(unet_model, seg_model, args=args, final='last', epoch=epoch, sub_class=sub_class, training_history=checkpoint_history)
+            print(f"💾 Checkpoint saved at epoch {epoch + 1}")
 
-        if (epoch+1) % 10==0 and epoch > 0:
-            if data_len > 0:  # Only evaluate if test data exists
-                temp_image_auroc,temp_pixel_auroc= eval(testing_dataset_loader,args,unet_model,seg_model,data_len,sub_class,device)
-                image_auroc_list.append(temp_image_auroc)
-                pixel_auroc_list.append(temp_pixel_auroc)
-                performance_x_list.append(int(epoch))
-                if(temp_image_auroc+temp_pixel_auroc>=best_image_auroc+best_pixel_auroc):
-                    if temp_image_auroc>=best_image_auroc:
-                        training_history = {
-                            'train_loss_list': train_loss_list,
-                            'train_noise_loss_list': train_noise_loss_list,
-                            'train_focal_loss_list': train_focal_loss_list,
-                            'train_smL1_loss_list': train_smL1_loss_list,
-                            'loss_x_list': loss_x_list,
-                            'image_auroc_list': image_auroc_list,
-                            'pixel_auroc_list': pixel_auroc_list,
-                            'performance_x_list': performance_x_list,
-                            'best_image_auroc': temp_image_auroc,
-                            'best_pixel_auroc': temp_pixel_auroc,
-                            'best_epoch': epoch
-                        }
-                        save(unet_model,seg_model, args=args,final='best',epoch=epoch,sub_class=sub_class, training_history=training_history)
-                        best_image_auroc = temp_image_auroc
-                        best_pixel_auroc = temp_pixel_auroc
-                        best_epoch = epoch
-            else:
-                print(f"⚠️  Skipping evaluation at epoch {epoch+1} - no test data available")
+        # Skip evaluation during training - focus only on loss
                 
             
-    # Save final checkpoint with training history
+    # Save final checkpoint with training history (loss only)
     final_training_history = {
         'train_loss_list': train_loss_list,
         'train_noise_loss_list': train_noise_loss_list,
         'train_focal_loss_list': train_focal_loss_list,
         'train_smL1_loss_list': train_smL1_loss_list,
-        'loss_x_list': loss_x_list,
-        'image_auroc_list': image_auroc_list,
-        'pixel_auroc_list': pixel_auroc_list,
-        'performance_x_list': performance_x_list,
-        'best_image_auroc': best_image_auroc,
-        'best_pixel_auroc': best_pixel_auroc,
-        'best_epoch': best_epoch
+        'loss_x_list': loss_x_list
     }
     save(unet_model,seg_model, args=args,final='last',epoch=args['EPOCHS']-1,sub_class=sub_class, training_history=final_training_history)
 
     # Skip final plot to save memory
     
-    # Save training statistics
+    # Save training statistics (loss-focused)
+    final_loss = train_loss_list[-1] if train_loss_list else 0
     training_stats = {
-        'total_epochs': args['EPOCHS'],
-        'best_epoch': best_epoch,
-        'best_image_auroc': best_image_auroc,
-        'best_pixel_auroc': best_pixel_auroc,
+        'total_epochs': len(train_loss_list),
+        'final_loss': final_loss,
+        'min_loss': min(train_loss_list) if train_loss_list else 0,
         'avg_epoch_time': np.mean(epoch_times) if epoch_times else 0,
         'total_training_time': sum(epoch_times) if epoch_times else 0
     }
@@ -472,9 +509,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
     profiler.print_summary()
     profiler.save_stats()
 
-    temp = {"classname":[sub_class],"Image-AUROC": [best_image_auroc],"Pixel-AUROC":[best_pixel_auroc],"epoch":best_epoch}
-    df_class = pd.DataFrame(temp)
-    df_class.to_csv(f"{args['output_path']}/metrics/ARGS={args['arg_num']}/{args['eval_normal_t']}_{args['eval_noisier_t']}t_{args['condition_w']}_{class_type}_image_pixel_auroc_train.csv", mode='a',header=False,index=False)
+    # No AUROC metrics to save since evaluation is disabled
    
     
 
