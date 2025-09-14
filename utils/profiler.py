@@ -141,7 +141,7 @@ class PerformanceProfiler:
         
         return stats
     
-    def plot_metrics(self, save_path=None):
+    def plot_metrics(self, save_path=None, inline=False):
         """Plot performance metrics"""
         fig, axes = plt.subplots(2, 3, figsize=(18, 10))
         
@@ -195,11 +195,22 @@ class PerformanceProfiler:
         
         plt.tight_layout()
         
-        if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        if inline:
+            # Display inline for Jupyter notebooks
+            try:
+                from IPython.display import display
+                display(fig)
+                plt.close()
+            except ImportError:
+                # Fallback to regular display if IPython not available
+                plt.show()
         else:
-            plt.savefig(os.path.join(self.log_dir, 'performance_metrics.png'), dpi=300, bbox_inches='tight')
-        plt.close()
+            # Save to file
+            if save_path:
+                plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            else:
+                plt.savefig(os.path.join(self.log_dir, 'performance_metrics.png'), dpi=300, bbox_inches='tight')
+            plt.close()
     
     def save_stats(self, filename=None):
         """Save statistics to JSON file"""

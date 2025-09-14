@@ -77,8 +77,8 @@ def print_model_info(model, model_name):
 
 def plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_loss_list, 
                         train_smL1_loss_list, loss_x_list, image_auroc_list, 
-                        pixel_auroc_list, performance_x_list, sub_class, args):
-    """Plot and save learning curves"""
+                        pixel_auroc_list, performance_x_list, sub_class, args, inline=False):
+    """Plot and optionally save learning curves"""
     fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
     
     # Plot losses
@@ -163,16 +163,34 @@ def plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_los
     
     plt.tight_layout()
     
-    # Save the plot
-    os.makedirs(f'{args["output_path"]}/learning_curves/ARGS={args["arg_num"]}', exist_ok=True)
-    plt.savefig(f'{args["output_path"]}/learning_curves/ARGS={args["arg_num"]}/{sub_class}_learning_curves.png', 
-                dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # Print update
-    if len(loss_x_list) > 0:
-        print(f"📊 Learning curves updated! Epoch {current_epoch}, Loss: {current_loss:.4f}")
-        print(f"   📁 Saved to: outputs/learning_curves/ARGS={args['arg_num']}/{sub_class}_learning_curves.png")
+    if inline:
+        # Display inline for Jupyter notebooks
+        from IPython.display import display, clear_output
+        clear_output(wait=True)
+        display(fig)
+        plt.close()
+        # Print update
+        if len(loss_x_list) > 0:
+            print(f"📊 Learning curves updated! Epoch {current_epoch}, Loss: {current_loss:.4f}")
+    else:
+        # Save the plot to file
+        os.makedirs(f'{args["output_path"]}/learning_curves/ARGS={args["arg_num"]}', exist_ok=True)
+        plt.savefig(f'{args["output_path"]}/learning_curves/ARGS={args["arg_num"]}/{sub_class}_learning_curves.png', 
+                    dpi=300, bbox_inches='tight')
+        plt.close()
+        
+        # Print update
+        if len(loss_x_list) > 0:
+            print(f"📊 Learning curves updated! Epoch {current_epoch}, Loss: {current_loss:.4f}")
+            print(f"   📁 Saved to: outputs/learning_curves/ARGS={args['arg_num']}/{sub_class}_learning_curves.png")
+
+def is_jupyter_environment():
+    """Check if running in Jupyter notebook environment"""
+    try:
+        from IPython import get_ipython
+        return get_ipython() is not None and get_ipython().__class__.__name__ == 'ZMQInteractiveShell'
+    except ImportError:
+        return False
 
 def monitor_system_resources():
     """Monitor system resources"""
@@ -194,6 +212,13 @@ def monitor_system_resources():
     return f"CPU: {cpu_percent:.1f}% | RAM: {memory_percent:.1f}% ({memory_available_gb:.2f}GB free){gpu_memory_info}"
 
 def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_class,class_type,device, num_gpus=1):
+    
+    # Check if running in Jupyter environment
+    use_inline_plots = is_jupyter_environment()
+    if use_inline_plots:
+        print("📊 Detected Jupyter environment - using inline plots to save memory")
+    else:
+        print("📊 Using file-based plots")
     
     # Initialize profiler
     profiler = PerformanceProfiler(log_dir=f'{args["output_path"]}/profiling/ARGS={args["arg_num"]}/{sub_class}')
@@ -397,7 +422,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
         if epoch < 10 or epoch % 10 == 0:
             plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_loss_list, 
                                 train_smL1_loss_list, loss_x_list, image_auroc_list, 
-                                pixel_auroc_list, performance_x_list, sub_class, args)
+                                pixel_auroc_list, performance_x_list, sub_class, args, inline=use_inline_plots)
 
 
         if (epoch+1) % 50==0 and epoch > 0:
@@ -415,10 +440,10 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
             
     save(unet_model,seg_model, args=args,final='last',epoch=args['EPOCHS'],sub_class=sub_class)
 
-    # Plot and save learning curves
+    # Plot learning curves (final)
     plot_learning_curves(train_loss_list, train_noise_loss_list, train_focal_loss_list, 
                         train_smL1_loss_list, loss_x_list, image_auroc_list, 
-                        pixel_auroc_list, performance_x_list, sub_class, args)
+                        pixel_auroc_list, performance_x_list, sub_class, args, inline=use_inline_plots)
     
     # Save training statistics
     training_stats = {
@@ -435,7 +460,7 @@ def train(training_dataset_loader, testing_dataset_loader, args, data_len,sub_cl
 
     # Save profiler results
     profiler.print_summary()
-    profiler.plot_metrics()
+    profiler.plot_metrics(inline=use_inline_plots)
     profiler.save_stats()
 
     temp = {"classname":[sub_class],"Image-AUROC": [best_image_auroc],"Pixel-AUROC":[best_pixel_auroc],"epoch":best_epoch}
