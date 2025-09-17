@@ -360,6 +360,12 @@ def testing(testing_dataset_loader, args,unet_model,seg_model,data_len,sub_class
         f.tight_layout()
         f.savefig(savename)
         plt.close()
+        
+        # Memory cleanup every few iterations
+        if i % 100 == 0:
+            torch.cuda.empty_cache()
+            import gc
+            gc.collect()
 
 
     
@@ -472,13 +478,16 @@ def main():
 
             # Build correct path like in train.py
             subclass_path = os.path.join(args["data_root_path"], args['data_name'], sub_class)
+            print(f"🔍 Dataset path: {subclass_path}")
+            print(f"🔍 Test path will be: {subclass_path}/test/")
+            
             testing_dataset = RealIADTestDataset(
                 subclass_path, sub_class, img_size=args["img_size"]
             )
             class_type = args['data_name']
                     
             data_len = len(testing_dataset) 
-            test_loader = DataLoader(testing_dataset, batch_size=1, shuffle=False, num_workers=4)
+            test_loader = DataLoader(testing_dataset, batch_size=1, shuffle=False, num_workers=2, pin_memory=False)
 
             # make arg specific directories
             for i in [f'{args["output_path"]}/metrics/ARGS={args["arg_num"]}/{sub_class}']:

@@ -158,8 +158,13 @@ def inference(unet_model, seg_model, ddpm, image, args, device='cuda'):
         )
         
         # Get anomaly mask using the conditioned reconstruction
-        anomaly_mask = seg_model(torch.cat((image, pred_x_0_condition), dim=1))
-        anomaly_mask = torch.sigmoid(anomaly_mask)
+        anomaly_mask_logits = seg_model(torch.cat((image, pred_x_0_condition), dim=1))
+        anomaly_mask = torch.sigmoid(anomaly_mask_logits)
+        
+        # Calculate anomaly score using the same method as eval.py
+        topk_out_mask = torch.flatten(anomaly_mask[0], start_dim=1)
+        topk_out_mask = torch.topk(topk_out_mask, 50, dim=1, largest=True)[0]
+        anomaly_score = torch.mean(topk_out_mask).item()
         
     return {
         'original': image,
@@ -167,7 +172,7 @@ def inference(unet_model, seg_model, ddpm, image, args, device='cuda'):
         'recon_noisier': pred_x_0_noisier,
         'recon_conditioned': pred_x_0_condition,
         'anomaly_mask': anomaly_mask,
-        'anomaly_score': torch.mean(anomaly_mask).item()
+        'anomaly_score': anomaly_score
     }
 
 def visualize_results(results, save_path=None):
@@ -267,6 +272,11 @@ def main():
         
         # Visualize
         visualize_results(results, output_path)
+        
+        # Memory cleanup
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
         
     except Exception as e:
         print(f"❌ Error: {e}")
